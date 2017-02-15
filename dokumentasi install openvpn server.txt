@@ -1,0 +1,304 @@
+
+
+1- Step 1 — Installing OpenVPN
+install Extra Packages for Enterprise Linux (EPEL) repository
+$ yum install epel-release
+
+2- install First we need to install OpenVPN. We'll also install Easy RSA for generating our SSL key pairs, which will secure our VPN connections.
+
+$ yum install openvpn easy-rsa -y
+
+
+
+
+3- Step 2 — Configuring OpenVPN
+$ cp /usr/share/doc/openvpn-*/sample/sample-config-files/server.conf /etc/openvpn
+
+4- Let's open the file for editing
+
+$vi /etc/openvpn/server.conf
+
+uncomment ganti dengan baris seperti ini
+
+When we generate our keys later, the default Diffie-Hellman encryption length for Easy RSA will be 2048 bytes, so we need to change the dh filename to dh2048.pem.
+
+------------------------------------
+dh dh2048.pem
+------------------------------------
+
+We need to uncomment the push "redirect-gateway def1 bypass-dhcp" line, which tells the client to redirect all traffic through our OpenVPN.
+--------------------------------------------
+push "redirect-gateway def1 bypass-dhcp"
+push "dhcp-option DNS 8.8.8.8"
+push "dhcp-option DNS 8.8.4.4"
+-----------------------------------------------
+Next we need to provide DNS servers to the client, as it will not be able to use the default DNS servers provided by your Internet service provider. We're going to use Google's public DNS servers, 8.8.8.8 and 8.8.4.4.
+
+Do this by uncommenting the push "dhcp-option DNS lines and updating the IP addresses.
+-----------------------------------------------
+user nobody
+group nobody
+-----------------------------------------------
+
+Save and exit the OpenVPN server configuration file.
+
+5- Step 3 — Generating Keys and Certificates
+
+$ mkdir -p /etc/openvpn/easy-rsa/keys
+
+6- We also need to copy the key and certificate generation scripts into the directory.
+
+$ cp -rf /usr/share/easy-rsa/2.0/* /etc/openvpn/easy-rsa
+
+7- To make life easier for ourselves we're going to edit the default values the script
+uses so we don't have to type our information in each time. This information is stored
+in the vars file so let's open this for editing.
+
+$ vi /etc/openvpn/easy-rsa/vars
+
+8- We're going to be changing the values that start with KEY_. Update the following values to be accurate for your organization.
+
+The ones that matter the most are:
+
+    KEY_NAME: You should enter server here; you could enter something else, but then you would also have to update the configuration files that reference server.key and server.crt
+    KEY_CN: Enter the domain or subdomain that resolves to your server
+    KEY_CN=> buat cname/subdomain di panel digitalocean bagian domain(openvpn.filehelpo.com)
+
+For the other values, you can enter information for your organization based on the variable name.
+
+edit data seperti ini
+
+-----------------------------------------------------------------
+. . .
+
+# These are the default values for fields
+# which will be placed in the certificate.
+# Don't leave any of these fields blank.
+export KEY_COUNTRY="US"
+export KEY_PROVINCE="NY"
+export KEY_CITY="New York"
+export KEY_ORG="DigitalOcean"
+export KEY_EMAIL="sammy@filehelpo.com/klikframcode@gmail.com"
+export KEY_OU="Community"
+
+# X509 Subject Field
+export KEY_NAME="server"
+
+. . .
+
+export KEY_CN=openvpn.filehelpo.com.com
+
+. . .
+
+-----------------------------------------------------------------
+
+9- We're also going to remove the chance of our OpenSSL configuration not loading due to the version being undetectable. We're going to do this by copying the required configuration file and removing the version number.
+
+$ cp /etc/openvpn/easy-rsa/openssl-1.0.0.cnf /etc/openvpn/easy-rsa/openssl.cnf
+
+10- To start generating our keys and certificates we need to move into our easy-rsa directory and source in our new variables.
+
+$ cd /etc/openvpn/easy-rsa
+$ source ./vars
+
+11- Then we will clean up any keys and certificates which may already be in this folder and generate our certificate authority.
+
+$ ./clean-all
+
+12- When you build the certificate authority, you will be asked to enter all the information we put into the vars file, but you will see that your options are already set as the defaults. So, you can just press ENTER for each one.
+
+$ ./build-ca
+
+13- The next things we need to generate will are the key and certificate for the server. Again you can just go through the questions and press ENTER for each one to use your defaults. At the end, answer Y (yes) to commit the changes.
+
+$ ./build-key-server server
+
+14- We also need to generate a Diffie-Hellman key exchange file. This command will take a minute or two to complete:
+
+$ ./build-dh
+
+15- That's it for our server keys and certificates. Copy them all into our OpenVPN directory.
+
+$ cd /etc/openvpn/easy-rsa/keys
+$ cp dh2048.pem ca.crt server.crt server.key /etc/openvpn
+
+16- All of our clients will also need certificates to be able to authenticate. These keys and certificates will be shared with your clients, and it's best to generate separate keys and certificates for each client you intend on connecting.
+
+Make sure that if you do this you give them descriptive names, but for now we're going to have one client so we'll just call it client.
+
+$ cd /etc/openvpn/easy-rsa
+$ ./build-key client
+
+That's it for keys and certificates.
+
+
+
+
+
+
+17- Step 4 — Routing
+
+To keep things simple we're going to do our routing directly with iptables rather than the new firewalld.
+
+First, make sure the iptables service is installed and enabled.
+
+$ yum install iptables-services -y
+$ systemctl mask firewalld
+$ systemctl enable iptables
+$ systemctl stop firewalld
+$ systemctl start iptables
+$ iptables --flush
+
+18- Next we'll add a rule to iptables to forward our routing to our OpenVPN subnet, and save this rule.
+
+$ iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
+$ iptables-save > /etc/sysconfig/iptables
+
+19- Then we must enable IP forwarding in sysctl. Open sysctl.conf for editing.
+
+$ vi /etc/sysctl.conf
+
+Add the following line at the top of the file:
+
+-----------------------------
+net.ipv4.ip_forward = 1
+-----------------------------
+
+Then restart the network service so the IP forwarding will take effect.
+--------------------------------------------
+systemctl restart network.service
+--------------------------------------------
+
+
+
+
+
+20- Step 5 — Starting OpenVPN
+
+Now we're ready to run our OpenVPN service. So lets add it to systemctl:
+
+$ systemctl -f enable openvpn@server.service
+
+Start OpenVPN:
+
+$ systemctl start openvpn@server.service
+
+Well done; that's all the server-side configuration done for OpenVPN.
+
+Next we'll talk about how to connect a client to the server.
+
+21- Step 6 — Configuring a Client
+
+Regardless of your client machine's operating system, you will definitely need a copy of the ca certificate from the server, along with the client key and certificate.
+
+Locate the following files on the server. If you generated multiple client keys with unique descriptive names, then the key and certificate names will be different. In this article we used client.
+
+copy file(ca.crt|client.crt|client.key) yang ada diserver dibawah ini ke komputer client
+------------------------------------------------------
+/etc/openvpn/easy-rsa/keys/ca.crt
+/etc/openvpn/easy-rsa/keys/client.crt
+/etc/openvpn/easy-rsa/keys/client.key
+------------------------------------------------------
+
+22- buat file "client.ovpn" isinya seperti dibawah ini (jika clientnya memakai OS Windows)
+
+-----------------------------------------------------
+client
+dev tun
+proto udp
+remote your_server_ip 1194
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+comp-lzo
+verb 3
+ca /path/to/ca.crt
+cert /path/to/client.crt
+key /path/to/client.key
+-------------------------------------------
+
+kasus pembuatan openvpnserver file(ca.crt|client.crt|client.key) jadi satu dengan file "client.ovpn"
+maka jadi settingan jadi serperti ini
+----------------------------------------------------
+client
+dev tun
+proto udp
+remote your_server_ip(ip_openvpnserver) 1194
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+comp-lzo
+verb 3
+ca ca.crt
+cert client.crt
+key client.key
+-------------------------------------------
+
+keterangan :
+Copy these three files to your client machine. You can use SFTP or your preferred method. You could even open the files in your text editor and copy and paste the contents into new files on your client machine.
+
+Just make sure you make a note of where you save them.
+
+We're going to create a file called client.ovpn. This is a configuration file for an OpenVPN client, telling it how to connect to the server.
+
+    You'll need to change the first line to reflect the name you gave the client in your key and certificate; in our case, this is just client
+    You also need to update the IP address from your_server_ip to the IP address of your server; port 1194 can stay the same
+    Make sure the paths to your key and certificate files are correct
+
+This file can now be used by any OpenVPN client to connect to your server.
+
+23- jadi file yang di copy ke computer client adalah (dari kasus yang sudah dipraktekkan os windows):
+file dibawah ini disimpan dalam satu file di lokasi(C:\Program Files\OpenVPN\config)
+
+/etc/openvpn/easy-rsa/keys/ca.crt
+/etc/openvpn/easy-rsa/keys/client.crt
+/etc/openvpn/easy-rsa/keys/client.key
+/etc/openvpn/easy-rsa/keys/client.ovpn
+
+
+23- KETERANGAN LOKASI FILE SETIAP OS
+Windows:
+
+On Windows, you will need the official OpenVPN Community Edition binaries which come with a GUI. Then, place your .ovpn configuration file into the proper directory, C:\Program Files\OpenVPN\config, and click Connect in the GUI. OpenVPN GUI on Windows must be executed with administrative privileges.
+
+OS X:
+
+On Mac OS X, the open source application Tunnelblick provides an interface similar to the OpenVPN GUI on Windows, and comes with OpenVPN and the required TUN/TAP drivers. As with Windows, the only step required is to place your .ovpn configuration file into the ~/Library/Application
+Support/Tunnelblick/Configurations directory. Or, you can double-click on your .ovpn file.
+
+Linux:
+
+On Linux, you should install OpenVPN from your distribution's official repositories. You can then invoke OpenVPN by executing:
+
+sudo openvpn --config ~/path/to/client.ovpn
+
+
+
+
+
+Source :
+https://www.digitalocean.com/community/tutorials/how-to-setup-and-configure-an-openvpn-server-on-centos-7
+http://jaspher.com/blog/centos-7-install-and-configure-openvpn-server
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
